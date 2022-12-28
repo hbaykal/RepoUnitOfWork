@@ -1,0 +1,2602 @@
+using System;
+using System.Globalization;
+using System.Net.Sockets;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+using System.Collections.Generic;
+using log4net;
+using System.Reflection;
+using Intertech.Hsm.Host.Entities.Message;
+
+namespace Intertech.Hsm.Host.Cryptography.Thales {
+    public class HSM8000 {
+        private byte _cnt;
+        private TcpClient _connection;
+        private int _headerLength = 4;
+        private object _lock = new object( );
+        private uint _recvTimeout = 0x3e8;
+        private string[] validModeFlags = { "0", "1", "2", "3", "4" };
+        private string[] validEmvSchemes = { "0", "1", "2", "3" };
+
+        ILog log = LogManager.GetLogger( MethodBase.GetCurrentMethod( ).DeclaringType );
+
+        public HSM8000Error ChangeInUsePIN( string TPK, string PINTPK, string cardno, out string InUsePIN ) {
+            byte[] buffer2;
+            InUsePIN = null;
+            byte[] dst = new byte[0x41];
+            int index = 0;
+            dst[index] = 0x4a;
+            index++;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( TPK ), 0, dst, index, TPK.Length );
+            index += TPK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PINTPK ), 0, dst, index, PINTPK.Length );
+            index += PINTPK.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4a ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}{3}{4}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7], (char) buffer2[8] } );
+            InUsePIN = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error ChangePIN( string TPK, string PVK, string PINTPK, string cardno, char PVKI, out string PVV ) {
+            byte[] buffer2;
+            PVV = null;
+            byte[] dst = new byte[0x41];
+            int index = 0;
+            dst[index] = 0x4a;
+            index++;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( TPK ), 0, dst, index, TPK.Length );
+            index += TPK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PINTPK ), 0, dst, index, PINTPK.Length );
+            index += PINTPK.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4a ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            dst = new byte[0x2f + ( buffer2.Length - 4 )];
+            index = 0;
+            dst[index] = 0x44;
+            index++;
+            dst[index] = 0x47;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PVK ), 0, dst, index, PVK.Length );
+            index += PVK.Length;
+            Buffer.BlockCopy( buffer2, 4, dst, index, buffer2.Length - 4 );
+            index += buffer2.Length - 4;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            dst[index] = (byte) PVKI;
+            index++;
+            buffer2 = null;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x44 ) || ( buffer2[1] != 0x48 ) ) {
+                return HSM8000Error.SyncronizationError;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return (HSM8000Error) num3;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}{3}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7] } );
+            PVV = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error ChangePinZPK(string ZPK, string PINZPK, string cardno, out string InUsePIN)
+        {
+            InUsePIN = null;
+            byte[] buffer2;
+            byte[] senddata = new byte[0x41];
+            int index = 0;
+            senddata[index] = 0x4a;
+            index++;
+            senddata[index] = 0x45;
+            index++;
+            senddata[index] = 0x55;
+            index++;
+            string str2 = ZPK;
+            for (int i = 0; i < str2.Length; i++)
+            {
+                byte num2 = (byte)str2[i];
+                senddata[index++] = num2;
+            }
+            string str3 = PINZPK;
+            for (int j = 0; j < str3.Length; j++)
+            {
+                byte num3 = (byte)str3[j];
+                senddata[index++] = num3;
+            }
+            senddata[index] = 0x30;
+            index++;
+            senddata[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring(cardno.Length - 13, 12);
+            string str4 = cardno;
+            for (int k = 0; k < str4.Length; k++)
+            {
+                byte num4 = (byte)str4[k];
+                senddata[index++] = num4;
+            }
+            if (!this.Transmit(senddata, out buffer2))
+            {
+                return HSM8000Error.CommunicationError;
+            }
+            if ((buffer2[0] != 0x4a) || (buffer2[1] != 70))
+            {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ((buffer2[2] != 0x30) || (buffer2[3] != 0x30))
+            {
+                int num5 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num5))
+                {
+                    return (HSM8000Error)num5;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder();
+            builder.AppendFormat("{0}{1}{2}{3}{4}", new object[] { (char)buffer2[4], (char)buffer2[5], (char)buffer2[6], (char)buffer2[7], (char)buffer2[8] });
+            log.InfoFormat("ZpkPinLmk value:{0}", builder.ToString());
+            InUsePIN = builder.ToString();
+
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error EncryptClearPIN( string PIN, string cardno, out string InUsePIN ) {
+            byte[] buffer2;
+            InUsePIN = null;
+            byte[] dst = new byte[0x13];
+            int index = 0;
+            dst[index] = 0x42;
+            index++;
+            dst[index] = 0x41;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PIN ), 0, dst, index, PIN.Length );
+            index += PIN.Length;
+            dst[index] = 70;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x42 ) || ( buffer2[1] != 0x42 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            for ( int i = 0; i < 5; i++ ) {
+                InUsePIN = InUsePIN + ( (char) buffer2[4 + i] );
+            }
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error ExportTMK( out string encTMK, out string IV, string keyEPP, string macEPP, string tmk, string chkval ) {
+            int num;
+            byte[] buffer4;
+            IV = (string) ( encTMK = null );
+            byte[] src = new byte[keyEPP.Length / 2];
+            for ( num = 0; num < src.Length; num++ ) {
+                src[num] = byte.Parse( keyEPP.Substring( num * 2, 2 ), NumberStyles.HexNumber );
+            }
+            byte[] buffer2 = new byte[macEPP.Length / 2];
+            for ( num = 0; num < buffer2.Length; num++ ) {
+                buffer2[num] = byte.Parse( macEPP.Substring( num * 2, 2 ), NumberStyles.HexNumber );
+            }
+            byte[] dst = new byte[( ( ( 11 + tmk.Length ) + 0x10 ) + ( macEPP.Length / 2 ) ) + src.Length];
+            int dstOffset = 0;
+            dst[dstOffset++] = 0x47;
+            dst[dstOffset++] = 0x4b;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x34;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( tmk ), 0, dst, dstOffset, tmk.Length );
+            dstOffset += tmk.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( chkval ), 0, dst, dstOffset, chkval.Length );
+            dstOffset += chkval.Length;
+            for ( num = chkval.Length; num < 0x10; num++ ) {
+                dst[dstOffset++] = 0x30;
+            }
+            Buffer.BlockCopy( buffer2, 0, dst, dstOffset, buffer2.Length );
+            dstOffset += buffer2.Length;
+            Buffer.BlockCopy( src, 0, dst, dstOffset, src.Length );
+            dstOffset += src.Length;
+            if ( !this.Transmit( dst, out buffer4 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer4[0] != 0x47 ) || ( buffer4[1] != 0x4c ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer4[2] != 0x30 ) || ( buffer4[3] != 0x30 ) ) {
+                int num3 = ( ( buffer4[2] - 0x30 ) * 10 ) + ( buffer4[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            StringBuilder builder = new StringBuilder( );
+            dstOffset = 4;
+            num = 0;
+            while ( num < 0x10 ) {
+                builder.Append( (char) buffer4[dstOffset] );
+                num++;
+                dstOffset++;
+            }
+            IV = builder.ToString( );
+            builder.Remove( 0, builder.Length );
+            num = 0;
+            while ( num < 4 ) {
+                builder.Append( (char) buffer4[dstOffset] );
+                num++;
+                dstOffset++;
+            }
+            int num4 = int.Parse( builder.ToString( ) );
+            builder.Remove( 0, builder.Length );
+            num = 0;
+            while ( num < num4 ) {
+                builder.AppendFormat( "{0:X2}", buffer4[dstOffset] );
+                num++;
+                dstOffset++;
+            }
+            encTMK = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error ExportTMK( out string encTMK, int DESKeyOffset, int outlenCheckValue, string keyEPP, string macEPP, string tmk, string chkval ) {
+            int num;
+            byte[] buffer4;
+            encTMK = null;
+            byte[] src = new byte[keyEPP.Length / 2];
+            for ( num = 0; num < src.Length; num++ ) {
+                src[num] = byte.Parse( keyEPP.Substring( num * 2, 2 ), NumberStyles.HexNumber );
+            }
+            byte[] buffer2 = new byte[macEPP.Length / 2];
+            for ( num = 0; num < buffer2.Length; num++ ) {
+                buffer2[num] = byte.Parse( macEPP.Substring( num * 2, 2 ), NumberStyles.HexNumber );
+            }
+            byte[] dst = new byte[( ( ( ( 11 + tmk.Length ) + 0x10 ) + ( macEPP.Length / 2 ) ) + src.Length ) + 3];
+            int dstOffset = 0;
+            dst[dstOffset++] = 0x47; // commandCode G
+            dst[dstOffset++] = 0x4b; // commandCode K
+            dst[dstOffset++] = 0x30; //
+            dst[dstOffset++] = 0x31; //
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x34;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( tmk ), 0, dst, dstOffset, tmk.Length );
+            dstOffset += tmk.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( chkval ), 0, dst, dstOffset, chkval.Length );
+            dstOffset += chkval.Length;
+            for ( num = chkval.Length; num < 0x10; num++ ) {
+                dst[dstOffset++] = 0x30;
+            }
+            Buffer.BlockCopy( buffer2, 0, dst, dstOffset, buffer2.Length );
+            dstOffset += buffer2.Length;
+            Buffer.BlockCopy( src, 0, dst, dstOffset, src.Length );
+            dstOffset += src.Length;
+            dst[dstOffset++] = 0x3b;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x33;
+            if ( !this.Transmit( dst, out buffer4 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer4[0] != 0x47 ) || ( buffer4[1] != 0x4c ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer4[2] != 0x30 ) || ( buffer4[3] != 0x30 ) ) {
+                int num3 = ( ( buffer4[2] - 0x30 ) * 10 ) + ( buffer4[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            StringBuilder builder = new StringBuilder( );
+            dstOffset = 4;
+            builder.Remove( 0, builder.Length );
+            num = 0;
+            while ( num < 4 ) {
+                builder.Append( (char) buffer4[dstOffset] );
+                num++;
+                dstOffset++;
+            }
+            int num4 = int.Parse( builder.ToString( ) );
+            builder.Remove( 0, builder.Length );
+            num = 0;
+            while ( num < num4 ) {
+                builder.AppendFormat( "{0:X2}", buffer4[dstOffset] );
+                num++;
+                dstOffset++;
+            }
+            encTMK = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateCVV( string CVK, string cardno, string expirydate, string servicecode, out string CVV ) {
+            byte[] buffer2;
+            CVV = null;
+            byte[] dst = new byte[( 10 + CVK.Length ) + cardno.Length];
+            int index = 0;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x57;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( CVK ), 0, dst, index, CVK.Length );
+            index += CVK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            dst[index] = 0x3b;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( expirydate ), 0, dst, index, expirydate.Length );
+            index += expirydate.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( servicecode ), 0, dst, index, servicecode.Length );
+            index += servicecode.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x43 ) || ( buffer2[1] != 0x58 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}", (char) buffer2[4], (char) buffer2[5], (char) buffer2[6] );
+            CVV = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateMACOnPublicKey( PublicKeyEncoding pke, string publickey, out string MAC ) {
+            byte[] buffer2;
+            MAC = null;
+            byte[] senddata = new byte[4 + ( publickey.Length / 2 )];
+            int num = 0;
+            senddata[num++] = 0x45;
+            senddata[num++] = 0x4f;
+            senddata[num++] = 0x30;
+            if ( pke == PublicKeyEncoding.Format1 ) {
+                senddata[num++] = 0x31;
+            } else {
+                if ( pke != PublicKeyEncoding.Format2 ) {
+                    throw new CryptographicException( "Unknown public key encoding type" );
+                }
+                senddata[num++] = 50;
+            }
+            for ( int i = 0; i < ( publickey.Length / 2 ); i++ ) {
+                senddata[num++] = byte.Parse( publickey.Substring( i * 2, 2 ), NumberStyles.HexNumber );
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 80 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            MAC = string.Format( "{0:X2}{1:X2}{2:X2}{3:X2}", new object[] { buffer2[4], buffer2[5], buffer2[6], buffer2[7] } );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GeneratePVV( string PVK, string cardno, string inUsePIN, char PVKIndex, out string PVV ) {
+            byte[] buffer2;
+            PVV = "";
+            byte[] dst = new byte[( 15 + PVK.Length ) + inUsePIN.Length];
+            int index = 0;
+            dst[index] = 0x44;
+            index++;
+            dst[index] = 0x47;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PVK ), 0, dst, index, PVK.Length );
+            index += PVK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( inUsePIN ), 0, dst, index, inUsePIN.Length );
+            index += inUsePIN.Length;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            dst[index] = (byte) PVKIndex;
+            index++;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x44 ) || ( buffer2[1] != 0x48 ) ) {
+                return HSM8000Error.SyncronizationError;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            PVV = string.Format( "{0}{1}{2}{3}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7] } );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateRandomPIN( string cardno, out string InUsePIN ) {
+            byte[] buffer2;
+            InUsePIN = null;
+            byte[] dst = new byte[14];
+            int index = 0;
+            dst[index] = 0x4a;
+            index++;
+            dst[index] = 0x41;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4a ) || ( buffer2[1] != 0x42 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            for ( int i = 0; i < 5; i++ ) {
+                InUsePIN = InUsePIN + ( (char) buffer2[4 + i] );
+            }
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateRSAKeySet( RSAKeyType type, int keyLengthInBits, out byte[] kPublic, out byte[] ePublic, out byte[] kSecret ) {
+            int num;
+            byte[] buffer2;
+            int num4;
+            byte[] senddata = new byte[9];
+            kPublic = null;
+            ePublic = null;
+            kSecret = null;
+            string str = string.Format( "EI{0}{1:d4}01", (int) type, keyLengthInBits );
+            for ( num = 0; ( num < str.Length ) || ( num < 9 ); num++ ) {
+                senddata[num] = (byte) str[num];
+            }
+            uint num2 = this._recvTimeout;
+            this._recvTimeout = 0x2710;
+            bool flag = this.Transmit( senddata, out buffer2 );
+            this._recvTimeout = num2;
+            if ( !flag ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 0x4a ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                if ( num3 == 5 ) {
+                    return HSM8000Error.InvalidKeyTypeCode;
+                }
+                if ( num3 == 4 ) {
+                    return HSM8000Error.InvalidKeyLength;
+                }
+                return (HSM8000Error) num3;
+            }
+            if ( buffer2[4] != 0x30 ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            int count = 0;
+            int index = 5;
+            if ( buffer2[index] <= 0x80 ) {
+                count = buffer2[index];
+                index++;
+            } else {
+                num = buffer2[index] - 0x80;
+                count = 0;
+                index++;
+                for ( num4 = 0; num4 < num; num4++ ) {
+                    count = count << 8;
+                    count += buffer2[index];
+                    index++;
+                }
+            }
+            if ( count > buffer2.Length ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            if ( buffer2[index++] != 2 ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            if ( buffer2[index] <= 0x80 ) {
+                count = buffer2[index];
+                index++;
+            } else {
+                num = buffer2[index] - 0x80;
+                count = 0;
+                index++;
+                for ( num4 = 0; num4 < num; num4++ ) {
+                    count = count << 8;
+                    count += buffer2[index];
+                    index++;
+                }
+            }
+            if ( ( count * 8 ) != keyLengthInBits ) {
+                return HSM8000Error.InvalidKeyLength;
+            }
+            kPublic = new byte[count];
+            Buffer.BlockCopy( buffer2, index, kPublic, 0, count );
+            index += count;
+            if ( buffer2[index++] != 2 ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            if ( buffer2[index] <= 0x80 ) {
+                count = buffer2[index];
+                index++;
+            } else {
+                num = buffer2[index] - 0x80;
+                count = 0;
+                index++;
+                for ( num4 = 0; num4 < num; num4++ ) {
+                    count = count << 8;
+                    count += buffer2[index];
+                    index++;
+                }
+            }
+            ePublic = new byte[count];
+            Buffer.BlockCopy( buffer2, index, ePublic, 0, count );
+            index += count;
+            count = int.Parse( string.Format( "{0}{1}{2}{3}", new object[] { (char) buffer2[index++], (char) buffer2[index++], (char) buffer2[index++], (char) buffer2[index++] } ) );
+            kSecret = new byte[count];
+            Buffer.BlockCopy( buffer2, index, kSecret, 0, count );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateRSAKeySetRKL( RSAKeyType type, PublicKeyEncoding pke, int keyLengthInBits, out byte[] kPublic, out byte[] kSecret ) {
+            int num;
+            byte[] buffer2;
+            byte[] senddata = new byte[9];
+            kPublic = null;
+            kSecret = null;
+            string str = string.Format( "EI{0}{1:d4}{2:d02}", (int) type, keyLengthInBits, (int) pke );
+            for ( num = 0; ( num < str.Length ) || ( num < 9 ); num++ ) {
+                senddata[num] = (byte) str[num];
+            }
+            uint num2 = this._recvTimeout;
+            this._recvTimeout = 0x2710;
+            bool flag = this.Transmit( senddata, out buffer2 );
+            this._recvTimeout = num2;
+            if ( !flag ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 0x4a ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                if ( num3 == 5 ) {
+                    return HSM8000Error.InvalidKeyTypeCode;
+                }
+                if ( num3 == 4 ) {
+                    return HSM8000Error.InvalidKeyLength;
+                }
+                return (HSM8000Error) num3;
+            }
+            if ( buffer2[4] != 0x30 ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            int count = 0;
+            if ( buffer2[5] <= 0x80 ) {
+                count = buffer2[5];
+                count++;
+            } else {
+                num = buffer2[5] - 0x80;
+                count = 0;
+                int num4 = 1;
+                while ( num4 <= num ) {
+                    count = count << 8;
+                    count += buffer2[5 + num4];
+                    num4++;
+                }
+                count += num4;
+            }
+            if ( count > buffer2.Length ) {
+                return HSM8000Error.UnknownResponseFormat;
+            }
+            count++;
+            kPublic = new byte[count];
+            Buffer.BlockCopy( buffer2, 4, kPublic, 0, count );
+            int srcOffset = count + 4;
+            count = int.Parse( string.Format( "{0}{1}{2}{3}", new object[] { (char) buffer2[srcOffset++], (char) buffer2[srcOffset++], (char) buffer2[srcOffset++], (char) buffer2[srcOffset++] } ) );
+            kSecret = new byte[count];
+            Buffer.BlockCopy( buffer2, srcOffset, kSecret, 0, count );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateSignature( string keyIndex, byte[] data, out byte[] signature ) {
+            byte[] buffer2;
+            signature = null;
+            StringBuilder builder = new StringBuilder( );
+            builder.Append( "EW" );
+            builder.Append( "01" );
+            builder.Append( "01" );
+            builder.Append( "01" );
+            builder.Append( string.Format( "{0:d04}", data.Length ) );
+            byte[] dst = new byte[( builder.Length + data.Length ) + 3];
+            int dstOffset = 0;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( builder.ToString( ) ), 0, dst, dstOffset, builder.Length );
+            dstOffset += builder.Length;
+            Buffer.BlockCopy( data, 0, dst, dstOffset, data.Length );
+            dstOffset += data.Length;
+            dst[dstOffset] = 0x3b;
+            dstOffset++;
+            dst[dstOffset] = (byte) keyIndex[0];
+            dstOffset++;
+            dst[dstOffset] = (byte) keyIndex[1];
+            dstOffset++;
+            uint num2 = this._recvTimeout;
+            this._recvTimeout = 0x2710;
+            bool flag = this.Transmit( dst, out buffer2 );
+            this._recvTimeout = num2;
+            if ( !flag ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 0x58 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            int count = int.Parse( string.Format( "{0}{1}{2}{3}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7] } ) );
+            signature = new byte[count];
+            Buffer.BlockCopy( buffer2, 8, signature, 0, count );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateTMK( out string tmk, out string chkval ) {
+            byte[] buffer2;
+            chkval = (string) ( tmk = null );
+            byte[] senddata = new byte[] { 0x41, 0x30, 0x30, 0x30, 0x30, 50, 0x55 };
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x41 ) || ( buffer2[1] != 0x31 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num;
+            }
+            StringBuilder builder = new StringBuilder( );
+            int index = 4;
+            int num3 = 0;
+            while ( num3 < 0x21 ) {
+                builder.AppendFormat( "{0}", (char) buffer2[index] );
+                num3++;
+                index++;
+            }
+            tmk = builder.ToString( );
+            builder.Remove( 0, builder.Length );
+            num3 = 0;
+            while ( num3 < 6 ) {
+                builder.AppendFormat( "{0}", (char) buffer2[index] );
+                num3++;
+                index++;
+            }
+            chkval = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateTPK( string TMK, out string tpktmk, out string tpklmk, out string chkval ) {
+            byte[] buffer2;
+            int num4;
+            string str;
+            tpklmk = (string) ( str = null );
+            chkval = tpktmk = str;
+            byte[] senddata = new byte[6 + TMK.Length];
+            int num = 0;
+            senddata[num++] = 0x48;
+            senddata[num++] = 0x43;
+            string str3 = TMK;
+            for ( int i = 0; i < str3.Length; i++ ) {
+                byte num2 = (byte) str3[i];
+                senddata[num++] = num2;
+            }
+            senddata[num++] = 0x3b;
+            senddata[num++] = 0x58;
+            senddata[num++] = 0x55;
+            senddata[num++] = 0x31;
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x48 ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            StringBuilder builder = new StringBuilder( );
+            num = 5;
+            for ( num4 = 0; ( num4 < 0x20 ) && ( num < buffer2.Length ); num4++ ) {
+                builder.AppendFormat( "{0}", (char) buffer2[num++] );
+            }
+            tpktmk = builder.ToString( );
+            builder.Remove( 0, builder.Length );
+            for ( num4 = 0; ( num4 < 0x21 ) && ( num < buffer2.Length ); num4++ ) {
+                builder.AppendFormat( "{0}", (char) buffer2[num++] );
+            }
+            tpklmk = builder.ToString( );
+            builder.Remove( 0, builder.Length );
+            for ( num4 = 0; ( num4 < 6 ) && ( num < buffer2.Length ); num4++ ) {
+                builder.AppendFormat( "{0}", (char) buffer2[num++] );
+            }
+            chkval = builder.ToString( );
+            if ( chkval.Length == 0 ) {
+                this.GetKeyCheckValue( tpklmk, out chkval );
+            }
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GetKeyCheckValue( string keyTMKTPKorPVK, out string chkval ) {
+            int num2;
+            byte[] buffer2;
+            chkval = null;
+            byte[] senddata = new byte[5 + keyTMKTPKorPVK.Length];
+            int num = 0;
+            senddata[num++] = 0x42;
+            senddata[num++] = 0x55;
+            senddata[num++] = 0x30;
+            senddata[num++] = 50;
+            senddata[num++] = 0x31;
+            for ( num2 = 0; num2 < keyTMKTPKorPVK.Length; num2++ ) {
+                senddata[num++] = (byte) keyTMKTPKorPVK[num2];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x42 ) || ( buffer2[1] != 0x56 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            StringBuilder builder = new StringBuilder( );
+            for ( num2 = 4; num2 < 20; num2++ ) {
+                builder.AppendFormat( "{0}", (char) buffer2[num2] );
+            }
+            chkval = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error LoadAdditionalFormattingData( string data ) {
+            byte[] buffer2;
+            byte[] senddata = new byte[2 + data.Length];
+            int num = 0;
+            senddata[num++] = 80;
+            senddata[num++] = 0x43;
+            for ( int i = 0; i < data.Length; i++ ) {
+                senddata[num++] = (byte) data[i];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 80 ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num3;
+        }
+
+        public HSM8000Error LoadFormattingData( string data ) {
+            byte[] buffer2;
+            byte[] senddata = new byte[2 + data.Length];
+            int num = 0;
+            senddata[num++] = 80;
+            senddata[num++] = 0x41;
+            for ( int i = 0; i < data.Length; i++ ) {
+                senddata[num++] = (byte) data[i];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 80 ) || ( buffer2[1] != 0x42 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num3;
+        }
+
+        public HSM8000Error LoadPINTextStringEN( ) {
+            byte[] buffer2;
+            string str = "4ZERO3ONE3TWO5THREE4FOUR4FIVE3SIX5SEVEN5EIGHT4NINE";
+            byte[] senddata = new byte[2 + str.Length];
+            int num = 0;
+            senddata[num++] = 0x4c;
+            senddata[num++] = 0x49;
+            for ( int i = 0; i < str.Length; i++ ) {
+                senddata[num++] = (byte) str[i];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4c ) || ( buffer2[1] != 0x4a ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num3;
+        }
+
+        public HSM8000Error LoadPINTextStringTR( ) {
+            byte[] buffer2;
+            string str = "5SIFIR3BIR3IKI2UC4DORT3BES4ALTI4YEDI5SEKIZ5DOKUZ";
+            byte[] senddata = new byte[2 + str.Length];
+            int num = 0;
+            senddata[num++] = 0x4c;
+            senddata[num++] = 0x49;
+            for ( int i = 0; i < str.Length; i++ ) {
+                senddata[num++] = (byte) str[i];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4c ) || ( buffer2[1] != 0x4a ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num3;
+        }
+
+        public HSM8000Error LoadSecretKey( string keyIndex, byte[] secretKey ) {
+            byte[] buffer2;
+            byte[] dst = new byte[8 + secretKey.Length];
+            dst[0] = 0x45;
+            dst[1] = 0x4b;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( keyIndex ), 0, dst, 2, 2 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( string.Format( "{0:D04}", secretKey.Length ) ), 0, dst, 4, 4 );
+            Buffer.BlockCopy( secretKey, 0, dst, 8, secretKey.Length );
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 0x4c ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num;
+        }
+
+        public HSM8000Error PerformDiagnostic( out string chkLMK, out string fwRefNo ) {
+            byte[] buffer2;
+            int num2;
+            chkLMK = null;
+            fwRefNo = null;
+            byte[] senddata = new byte[] { 0x4e, 0x43 };
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4e ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num;
+            }
+            StringBuilder builder = new StringBuilder( );
+            for ( num2 = 0; num2 < 0x10; num2++ ) {
+                builder.Append( (char) buffer2[4 + num2] );
+            }
+            chkLMK = builder.ToString( );
+            builder.Remove( 0, builder.Length );
+            for ( num2 = 0; num2 < 9; num2++ ) {
+                builder.Append( (char) buffer2[20 + num2] );
+            }
+            fwRefNo = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error PINBlockTPK2ZPK( string TPK, string PINTPK, string ZPK, string cardno, out string PINZPK ) {
+            byte[] buffer;
+            PINZPK = null;
+            byte[] dst = new byte[0x66];
+            int index = 0;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x41;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( TPK ), 0, dst, index, TPK.Length );
+            index += TPK.Length;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( ZPK ), 0, dst, index, ZPK.Length );
+            index += ZPK.Length;
+            dst[index] = 0x31;
+            index++;
+            dst[index] = 50;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PINTPK ), 0, dst, index, PINTPK.Length );
+            index += PINTPK.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer[0] != 0x43 ) || ( buffer[1] != 0x42 ) ) {
+                return HSM8000Error.SyncronizationError;
+            }
+            if ( ( buffer[2] != 0x30 ) || ( buffer[3] != 0x30 ) ) {
+                int num2 = ( ( buffer[2] - 0x30 ) * 10 ) + ( buffer[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}{3}{4}{5}{6}{7}{8}{9}{10}{11}{12}{13}{14}{15}", new object[] { (char) buffer[6], (char) buffer[7], (char) buffer[8], (char) buffer[9], (char) buffer[10], (char) buffer[11], (char) buffer[12], (char) buffer[13], (char) buffer[14], (char) buffer[15], (char) buffer[0x10], (char) buffer[0x11], (char) buffer[0x12], (char) buffer[0x13], (char) buffer[20], (char) buffer[0x15] } );
+            PINZPK = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GetPinLmkFromTPK(string TPK, string pinBlock, string cardno, out string pinLmk)
+        {
+            pinLmk = null;
+            byte[] buffer2;
+            byte[] dst = new byte[0x41];
+            int index = 0;
+            dst[index] = 0x4a;
+            index++;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(TPK), 0, dst, index, TPK.Length);
+            index += TPK.Length;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(pinBlock), 0, dst, index, pinBlock.Length);
+            index += pinBlock.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring(cardno.Length - 13, 12);
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(cardno), 0, dst, index, cardno.Length);
+            index += cardno.Length;
+            if (!this.Transmit(dst, out buffer2))
+            {
+                return HSM8000Error.CommunicationError;
+            }
+            if ((buffer2[0] != 0x4a) || (buffer2[1] != 0x44))
+            {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ((buffer2[2] != 0x30) || (buffer2[3] != 0x30))
+            {
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder();
+            builder.AppendFormat("{0}{1}{2}{3}{4}", new object[] { (char)buffer2[4], (char)buffer2[5], (char)buffer2[6], (char)buffer2[7], (char)buffer2[8] });
+            pinLmk = builder.ToString();
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error PrintPIN( string cardno, string inUsePIN, string[] printFields ) {
+            int num;
+            byte[] buffer2;
+            StringBuilder builder = new StringBuilder( );
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            builder.Append( cardno );
+            builder.Append( inUsePIN );
+            if ( printFields != null ) {
+                for ( num = 0; num < printFields.Length; num++ ) {
+                    builder.Append( ";" );
+                    builder.Append( printFields[num] );
+                }
+            }
+            byte[] senddata = new byte[3 + builder.Length];
+            int num2 = 0;
+            senddata[num2++] = 80;
+            senddata[num2++] = 0x45;
+            senddata[num2++] = 0x43;
+            for ( num = 0; num < builder.Length; num++ ) {
+                senddata[num2++] = (byte) builder[num];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 80 ) || ( buffer2[1] != 70 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            uint receiveTimeout = this.ReceiveTimeout;
+            this.ReceiveTimeout = 0x2710;
+            if ( this._cnt == 0 ) {
+                this._cnt = 0xff;
+            } else {
+                this._cnt = (byte) ( this._cnt - 1 );
+            }
+            bool flag = this.Recv( out buffer2 );
+            this.ReceiveTimeout = receiveTimeout;
+            if ( !flag ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 80 ) || ( buffer2[1] != 90 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num5 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num5 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num5;
+        }
+
+        public HSM8000Error PrintSolicitationData( string cardno, string[] printFields ) {
+            int num;
+            byte[] buffer2;
+            StringBuilder builder = new StringBuilder( );
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            builder.Append( cardno );
+            for ( num = 0; num < printFields.Length; num++ ) {
+                builder.Append( ";" );
+                builder.Append( printFields[num] );
+            }
+            byte[] senddata = new byte[3 + builder.Length];
+            int num2 = 0;
+            senddata[num2++] = 0x4f;
+            senddata[num2++] = 0x45;
+            senddata[num2++] = 0x43;
+            for ( num = 0; num < builder.Length; num++ ) {
+                senddata[num2++] = (byte) builder[num];
+            }
+            if ( !this.Transmit( senddata, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4f ) || ( buffer2[1] != 70 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num3;
+            }
+            uint receiveTimeout = this.ReceiveTimeout;
+            this.ReceiveTimeout = 0x2710;
+            if ( this._cnt == 0 ) {
+                this._cnt = 0xff;
+            } else {
+                this._cnt = (byte) ( this._cnt - 1 );
+            }
+            bool flag = this.Recv( out buffer2 );
+            this.ReceiveTimeout = receiveTimeout;
+            if ( !flag ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4f ) || ( buffer2[1] != 90 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num5 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num5 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num5;
+        }
+
+        private bool Recv( out byte[] data ) {
+            data = null;
+            if ( this._connection == null ) {
+                throw new CryptographicException( "No connection object" );
+            }
+            NetworkStream stream = this._connection.GetStream( );
+            if ( !stream.CanRead ) {
+                throw new CryptographicException( "Not allowed to read from this Network Stream" );
+            }
+            for ( int i = 0; ( i < ( this._recvTimeout / 10 ) ) && !stream.DataAvailable; i++ ) {
+                if ( stream.DataAvailable ) {
+                    break;
+                }
+                Thread.Sleep( 10 );
+            }
+            if ( !stream.DataAvailable ) {
+                return false;
+            }
+            byte[] buffer = new byte[2];
+            if ( stream.Read( buffer, 0, 1 ) != 1 ) {
+                return false;
+            }
+            if ( !stream.DataAvailable ) {
+                return false;
+            }
+            if ( stream.Read( buffer, 1, 1 ) != 1 ) {
+                return false;
+            }
+            int count = ( buffer[0] << 8 ) + buffer[1];
+            if ( ( count > this._connection.ReceiveBufferSize ) || ( ( this._headerLength != 0 ) && ( count <= this._headerLength ) ) ) {
+                byte[] buffer2 = new byte[this._connection.ReceiveBufferSize];
+                stream.Read( buffer2, 0, buffer2.Length );
+                throw new CryptographicException( "Invalid message format" );
+            }
+            if ( this._headerLength > 0 ) {
+                byte[] buffer3 = new byte[1];
+                if ( stream.Read( buffer3, 0, 1 ) != 1 ) {
+                    throw new CryptographicException( "Can not read message header from stream." );
+                }
+                if ( buffer3[0] != this._cnt ) {
+                    byte[] buffer4 = new byte[this._connection.ReceiveBufferSize];
+                    stream.Read( buffer4, 0, buffer4.Length );
+                    log.DebugFormat("Unexpected data: '{0} != {1}', buffer:{2}", buffer3[0], this._cnt, ByteArrayToHex(buffer4));
+                    throw new CryptographicException( "Syncronization failure" );
+                }
+                for ( int j = this._headerLength - 1; j > 0; j-- ) {
+                    if ( stream.Read( buffer3, 0, 1 ) != 1 ) {
+                        throw new CryptographicException( "Can not read message header from stream." );
+                    }
+                }
+                if ( this._cnt == 0xff ) {
+                    this._cnt = 0;
+                } else {
+                    this._cnt = (byte) ( this._cnt + 1 );
+                }
+                count -= this._headerLength;
+            }
+            if ( count < 4 ) {
+                throw new CryptographicException( "Invalid message format" );
+            }
+            data = new byte[count];
+            if ( stream.Read( data, 0, count ) != count ) {
+                return false;
+            }
+            return true;
+        }
+
+        private void Send( byte[] data ) {
+            log.DebugFormat( "Data sent: '{0}'", ByteArrayToHex (data));
+            if (this._connection == null) {
+                throw new CryptographicException("No connection object");
+            }
+            NetworkStream stream = this._connection.GetStream();
+            if (!stream.CanWrite) {
+                throw new CryptographicException("Not allowed to write to this Network Stream");
+            }
+            byte[] bytes = BitConverter.GetBytes((ushort)(data.Length + this._headerLength));
+            bytes[0] = (byte)(bytes[0] ^ bytes[1]);
+            bytes[1] = (byte)(bytes[0] ^ bytes[1]);
+            bytes[0] = (byte)(bytes[0] ^ bytes[1]);
+            stream.Write(bytes, 0, 2);
+            if (this._headerLength != 0) {
+                byte[] buffer = new byte[this._headerLength];
+                buffer[0] = this._cnt;
+                stream.Write(buffer, 0, this._headerLength);
+            }
+            stream.Write(data, 0, data.Length);
+        }
+
+        private bool Transmit( byte[] senddata, out byte[] recvdata ) {
+            lock ( this._lock ) {
+                this.Send( senddata );
+                bool res  = this.Recv( out recvdata );
+                log.DebugFormat( "Data received: '{0}'", ByteArrayToHex( recvdata ) );
+                return res;
+            }
+        }
+
+        public HSM8000Error ValidateSignature( string kPublic, string MACOnPublic, string signature, string data ) {
+            int num2;
+            byte[] buffer2;
+            byte[] dst = new byte[( ( 0x16 + ( signature.Length / 2 ) ) + ( data.Length / 2 ) ) + ( kPublic.Length / 2 )];
+            int dstOffset = 0;
+            dst[dstOffset++] = 0x45;
+            dst[dstOffset++] = 0x59;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            dst[dstOffset++] = 0x30;
+            dst[dstOffset++] = 0x31;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( string.Format( "{0:d04}", signature.Length / 2 ) ), 0, dst, dstOffset, 4 );
+            dstOffset += 4;
+            for ( num2 = 0; num2 < signature.Length; num2 += 2 ) {
+                dst[dstOffset++] = byte.Parse( signature.Substring( num2, 2 ), NumberStyles.HexNumber );
+            }
+            dst[dstOffset++] = 0x3b;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( string.Format( "{0:d04}", data.Length / 2 ) ), 0, dst, dstOffset, 4 );
+            dstOffset += 4;
+            for ( num2 = 0; num2 < data.Length; num2 += 2 ) {
+                dst[dstOffset++] = byte.Parse( data.Substring( num2, 2 ), NumberStyles.HexNumber );
+            }
+            dst[dstOffset++] = 0x3b;
+            for ( num2 = 0; num2 < MACOnPublic.Length; num2 += 2 ) {
+                dst[dstOffset++] = byte.Parse( MACOnPublic.Substring( num2, 2 ), NumberStyles.HexNumber );
+            }
+            for ( num2 = 0; num2 < kPublic.Length; num2 += 2 ) {
+                dst[dstOffset++] = byte.Parse( kPublic.Substring( num2, 2 ), NumberStyles.HexNumber );
+            }
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x45 ) || ( buffer2[1] != 90 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num3 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( !Enum.IsDefined( typeof( HSM8000Error ), num3 ) ) {
+                return HSM8000Error.UnknownError;
+            }
+            return (HSM8000Error) num3;
+        }
+
+        public HSM8000Error VerifyCVV( string CVK, string cardno, string CVV, string expirydate, string servicecode ) {
+            byte[] buffer2;
+            byte[] dst = new byte[( 13 + CVK.Length ) + cardno.Length];
+            int index = 0;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x59;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( CVK ), 0, dst, index, CVK.Length );
+            index += CVK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( CVV ), 0, dst, index, CVV.Length );
+            index += CVV.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            dst[index] = 0x3b;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( expirydate ), 0, dst, index, expirydate.Length );
+            index += expirydate.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( servicecode ), 0, dst, index, servicecode.Length );
+            index += servicecode.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x43 ) || ( buffer2[1] != 90 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                return (HSM8000Error) num2;
+            }
+            return HSM8000Error.UnknownError;
+        }
+
+        public HSM8000Error VerifyPIN( string TPK, string PINTPK, string cardno, string InUsePIN ) {
+            byte[] buffer2;
+            byte[] dst = new byte[0x41];
+            int index = 0;
+            dst[index] = 0x4a;
+            index++;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( TPK ), 0, dst, index, TPK.Length );
+            index += TPK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PINTPK ), 0, dst, index, PINTPK.Length );
+            index += PINTPK.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4a ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}{3}{4}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7], (char) buffer2[8] } );
+            if ( builder.ToString( ) != InUsePIN ) {
+                return HSM8000Error.VerificationFailure;
+            }
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error VerifyPINUnderZPK( string ZPK, string PINZPK, string cardno, string InUsePIN ) {
+            byte[] buffer2;
+            byte[] senddata = new byte[128];
+            int index = 0;
+            senddata[index] = 0x4a;
+            index++;
+            senddata[index] = 0x45;
+            index++;
+            senddata[index] = (byte)GetKeySchemeLMK(ZPK);
+            index++;       
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(ZPK), 0, senddata, index, ZPK.Length);
+            index += ZPK.Length;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(PINZPK), 0, senddata, index, PINZPK.Length);
+            index += PINZPK.Length;
+            senddata[index] = 0x30;
+            index++;
+            senddata[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(cardno), 0, senddata, index, cardno.Length);
+            index += cardno.Length;
+            byte[] destBuffer = new byte[index];
+            Array.Copy(senddata, 0, destBuffer, 0, index);
+            if ( !this.Transmit(destBuffer, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x4a ) || ( buffer2[1] != 70 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] != 0x30 ) || ( buffer2[3] != 0x30 ) ) {
+                int num5 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num5 ) ) {
+                    return (HSM8000Error) num5;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder( );
+            builder.AppendFormat( "{0}{1}{2}{3}{4}", new object[] { (char) buffer2[4], (char) buffer2[5], (char) buffer2[6], (char) buffer2[7], (char) buffer2[8] } );
+            log.InfoFormat("ZpkPinLmk value:{0}", builder.ToString());
+            if ( builder.ToString( ) != InUsePIN ) {
+                return HSM8000Error.VerificationFailure;
+            }
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error TranslatePinLMK2LMK(string pan, string pinLmk, string lmkId, out string newPinLmk)
+        {
+            newPinLmk = null;
+            byte[] buffer2;
+            byte[] dst = new byte[22];
+            int index = 0;
+            dst[index] = (byte)'B'; index++;
+            dst[index] = (byte)'G'; index++;
+            pan = GetPanLastDigits(pan, 12, false);
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(pan), 0, dst, index, pan.Length);
+            index += pan.Length;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(pinLmk), 0, dst, index, pinLmk.Length);
+            index += pinLmk.Length;
+            dst[index] = (byte)'%'; index++;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(lmkId), 0, dst, index, lmkId.Length);
+            index += lmkId.Length;
+            if (!this.Transmit(dst, out buffer2))
+            {
+                return HSM8000Error.CommunicationError;
+            }
+            if ((buffer2[0] != 'B') || (buffer2[1] != 'H'))
+            {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ((buffer2[2] != 0x30) || (buffer2[3] != 0x30))
+            {
+                int num5 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num5))
+                {
+                    return (HSM8000Error)num5;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            StringBuilder builder = new StringBuilder();
+            builder.AppendFormat("{0}{1}{2}{3}{4}", new object[] { (char)buffer2[4], (char)buffer2[5], (char)buffer2[6], (char)buffer2[7], (char)buffer2[8] });
+            newPinLmk =  builder.ToString();           
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error VerifyPVV( string TPK, string PVK, string PINTPK, string cardno, char PVKI, string PVV ) {
+            byte[] buffer2;
+            byte[] dst = new byte[0x66];
+            int index = 0;
+            dst[index] = 0x44;
+            index++;
+            dst[index] = 0x43;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( TPK ), 0, dst, index, TPK.Length );
+            index += TPK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PVK ), 0, dst, index, PVK.Length );
+            index += PVK.Length;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PINTPK ), 0, dst, index, PINTPK.Length );
+            index += PINTPK.Length;
+            dst[index] = 0x30;
+            index++;
+            dst[index] = 0x31;
+            index++;
+            cardno = "0000000000000000" + cardno;
+            cardno = cardno.Substring( cardno.Length - 13, 12 );
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( cardno ), 0, dst, index, cardno.Length );
+            index += cardno.Length;
+            dst[index] = (byte) PVKI;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( PVV ), 0, dst, index, PVV.Length );
+            index += PVV.Length;
+            if ( !this.Transmit( dst, out buffer2 ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer2[0] != 0x44 ) || ( buffer2[1] != 0x44 ) ) {
+                return HSM8000Error.UnknownResponseCode;
+            }
+            if ( ( buffer2[2] == 0x30 ) && ( buffer2[3] == 0x30 ) ) {
+                return HSM8000Error.Success;
+            }
+            int num2 = ( ( buffer2[2] - 0x30 ) * 10 ) + ( buffer2[3] - 0x30 );
+            if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                return (HSM8000Error) num2;
+            }
+            return HSM8000Error.UnknownError;
+        }
+
+        public HSM8000Error ZPKfZMK2LMK( string ZMK, string ZPKZMK, out string ZPKLMK ) {
+            byte[] buffer;
+            ZPKLMK = null;
+            byte[] dst = new byte[0x44];
+            int index = 0;
+            //dst[index] = 70;
+            dst[index] = 0x46;
+            index++;
+            dst[index] = 0x41;
+            index++;
+            dst[index] = 0x55;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( ZMK ), 0, dst, index, ZMK.Length );
+            index += ZMK.Length;
+            dst[index] = 0x58;
+            index++;
+            Buffer.BlockCopy( Encoding.ASCII.GetBytes( ZPKZMK ), 0, dst, index, ZPKZMK.Length );
+            index += ZPKZMK.Length;
+            if ( !this.Transmit( dst, out buffer ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+            if ( ( buffer[0] != 70 ) || ( buffer[1] != 0x42 ) ) {
+                return HSM8000Error.SyncronizationError;
+            }
+            if ( ( buffer[2] != 0x30 ) || ( buffer[3] != 0x30 ) ) {
+                int num2 = ( ( buffer[2] - 0x30 ) * 10 ) + ( buffer[3] - 0x30 );
+                if ( Enum.IsDefined( typeof( HSM8000Error ), num2 ) ) {
+                    return (HSM8000Error) num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            for ( int i = 0; i < 0x20; i++ ) {
+                ZPKLMK = ZPKLMK + ( (char) buffer[i + 5] );
+            }
+            return HSM8000Error.Success;
+        }
+
+
+        public HSM8000Error ZPKfZMK2LMKA6Command(string ZMK, string ZPKZMK, out string ZPKLMK)
+        {
+            string keyTypes = "001";
+            byte[] buffer;
+            ZPKLMK = null;
+            byte[] dst = new byte[512];
+            int index = 0;
+            dst[index] = 0x41;
+            index++;
+            dst[index] = 0x36;
+            index++;
+            if (ZMK.Length >= 72)
+                keyTypes = "FFF";
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(keyTypes), 0, dst, index, keyTypes.Length);
+            index += keyTypes.Length;
+            dst[index] = (byte)GetKeySchemeLMK(ZMK);
+            index++;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(ZMK), 0, dst, index, ZMK.Length);
+            index += ZMK.Length;
+            dst[index] = (byte)GetKeySchemeZMK(ZPKZMK);
+            index++;
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(ZPKZMK), 0, dst, index, ZPKZMK.Length);
+            index += ZPKZMK.Length;
+            dst[index] = (byte)GetKeySchemeLMK(ZPKZMK);
+            index++;
+            dst[index] = (byte)'%';
+            index++;
+            string lmkId = ZMK.Length > 33 ? "01" : "00";
+            Buffer.BlockCopy(Encoding.ASCII.GetBytes(lmkId), 0, dst, index, 2);
+            index += 2;
+            if (ZMK.Length>33)
+            {
+                dst[index] = (byte)'#';
+                index++;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes("7200"), 0, dst, index, 4);
+                index += 4;
+            }
+            byte[] destBuffer = new byte[index];
+            Array.Copy(dst, 0, destBuffer, 0, index);
+            if (!this.Transmit(destBuffer, out buffer))
+            {
+                return HSM8000Error.CommunicationError;
+            }
+            if ((buffer[0] != 0x41) || (buffer[1] != 0x37))
+            {
+                return HSM8000Error.SyncronizationError;
+            }
+            if ((buffer[2] != 0x30) || (buffer[3] != 0x30))
+            {
+                int num2 = ((buffer[2] - 0x30) * 10) + (buffer[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+            }
+            int resultLength = ZMK.Length >= 72 ? 72 : 32; 
+            for (int i = 0; i < resultLength; i++)
+            {
+                ZPKLMK = ZPKLMK + ((char)buffer[i + 5]);
+            }
+            return HSM8000Error.Success;
+        }
+
+        internal static char GetKeySchemeZMK(string KEY)
+        {
+            if (KEY.Length <= 17) return 'Z';
+            if (KEY.Length <= 33) return 'X';
+            if (KEY.Length <= 49) return 'Y';
+            return 'R';
+        }
+
+        internal static char GetKeySchemeLMK(string KEY)
+        {
+            if (KEY.Length <= 17) return 'Z';
+            if (KEY.Length <= 33) return 'U';
+            if (KEY.Length <= 49) return 'T';
+            return 'S';
+        }
+
+        byte[] GetHashIdentiferBlocks( HashIdentifier hashId ) {
+            byte[] buffer = new byte[2];
+            buffer[0] = 0x30;
+
+            switch ( hashId ) {
+                case HashIdentifier.SHA1:
+                    buffer[1] = 0x31;
+                    break;
+                case HashIdentifier.MD5:
+                    buffer[1] = 0x32;
+                    break;
+                case HashIdentifier.ISO_10118_2:
+                    buffer[1] = 0x33;
+                    break;
+            }
+            return buffer;
+        }
+
+        public HSM8000Error GenerateHashBlock( HashIdentifier hashId, string data, out string hashData ) {
+            hashData = null;
+            string cmdParams = string.Format( "GM{0:d2}{1:d5}", (int) hashId, data.Length );
+            var request = new List<byte>( );
+            request.AddRange( Encoding.ASCII.GetBytes( cmdParams ) );
+            request.AddRange( Encoding.ASCII.GetBytes( data ) );
+
+            byte[] buffer;
+            if ( !Transmit( request.ToArray( ), out buffer ) ) {
+                return HSM8000Error.CommunicationError;
+            }
+
+            if ( ( buffer[0] != 0x47 ) || ( buffer[1] != 0x4e ) ) {
+                return HSM8000Error.SyncronizationError;
+            }
+
+            if ( ( buffer[2] != 0x30 ) || ( buffer[3] != 0x30 ) ) {
+                int num = ( ( buffer[2] - 0x30 ) * 10 ) + ( buffer[3] - 0x30 );
+                if ( !Enum.IsDefined( typeof( HSM8000Error ), num ) ) {
+                    return HSM8000Error.UnknownError;
+                }
+                return (HSM8000Error) num;
+            }
+
+            int len = 0;
+            if ( hashId == HashIdentifier.SHA1 )
+                len = 20;
+            else if ( hashId == HashIdentifier.MD5 || hashId == HashIdentifier.ISO_10118_2 )
+                len = 16;
+
+            StringBuilder builder = new StringBuilder( );
+            int index = 0;
+            int offset = 4;
+            while ( index < len ) {
+                builder.AppendFormat( "{0:X2}", buffer[index + offset] );
+                index++;
+            }
+            hashData = builder.ToString( );
+            return HSM8000Error.Success;
+        }
+
+
+        //Without Signature
+        public HSM8000Error ExportTMK_OAEP(string keyBlock, string keyEPP, string macEPP, string tmk, string chkval, out string encTMK) {
+            encTMK = null;
+
+            byte[] bytesKeyEPP = ConvertHexStringToByteArray(keyEPP);
+
+            byte[] MAC = ConvertHexStringToByteArray(macEPP);
+
+            ///////////////////////////////////////////////////////////////////////////
+            byte[] cmd = new byte[2048];
+
+            int offset = 0;
+
+            cmd[offset++] = 0x47;
+            cmd[offset++] = 0x4B;
+
+            // algorithm id
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x31;
+
+            // pad mode id, OAEP (EME-OAEP-ENCODE
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x32;
+
+            //Mask Generation Function
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x31;
+
+            //MGF Hash Function 
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x31;
+
+            //OAEP Encoding Parameters Length
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+
+            //OAEP Encoding Parameters 
+            //NULL
+
+            //OAEP Encoding Parameters Delimiter
+            cmd[offset++] = 0x3B; //;
+
+            // DES Key Type
+            cmd[offset++] = 0x31;
+            cmd[offset++] = 0x34;
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+
+            #region Signature Related
+            ////Signature Indicator
+            //cmd[offset++] = 0x3D;    //'='
+
+            ////Signature Hash Identifier
+            ////'01' : SHA-1
+            ////'06' : SHA-256
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x31;
+
+            ////Signature Identifier
+            ////'01' : RSA
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x31;
+
+            ////Signature Pad Mode Identifier 
+            ////'01' : PKCS#1 v1.5 method (EME-PKCS1-v1_5)
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x31;
+
+
+            ////Header Data Block Length 
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+
+            ////Header Data Block
+            ////NULL
+
+            ////Delimiter
+            //cmd[offset++] = 0x3B;
+
+            ////Footer Data Block Length 
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x30;
+
+            ////Footer Data Block
+            ////NULL
+
+            ////Delimiter
+            //cmd[offset++] = 0x3B;
+
+            ////Private Key Flag
+            ////loaded private key to slot 2
+            ////'99' : use private key provided with command
+            //cmd[offset++] = 0x30;
+            //cmd[offset++] = 0x32;
+
+            ////Delimiter
+            ////cmd[offset++] = 0x3B;
+            #endregion Signature Related
+
+            // DES Key Flag
+            cmd[offset++] = 0x31;
+
+            //DES key (LMK) 
+            System.Buffer.BlockCopy(System.Text.ASCIIEncoding.ASCII.GetBytes(tmk), 0, cmd, offset, tmk.Length);
+            offset += tmk.Length;
+
+            //Check value
+            System.Buffer.BlockCopy(System.Text.ASCIIEncoding.ASCII.GetBytes(chkval), 0, cmd, offset, chkval.Length);
+            offset += chkval.Length;
+            for(int i = chkval.Length;i < 16;i++) {
+                cmd[offset++] = 0x30;
+            }
+
+            //MAC
+            System.Buffer.BlockCopy(MAC, 0, cmd, offset, MAC.Length);
+            offset += MAC.Length;
+
+            //Public key 
+            System.Buffer.BlockCopy(bytesKeyEPP, 0, cmd, offset, bytesKeyEPP.Length);
+            offset += bytesKeyEPP.Length;
+
+            //Authentication Data
+            //NULL           
+
+            // delimiter
+            cmd[offset++] = 0x3B; //;
+
+            //// key Block Type // 02 = Key Block Template for Diebold
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x32;
+
+            //Key Block Template Length (4 byte numeric)
+            System.Buffer.BlockCopy(System.Text.ASCIIEncoding.ASCII.GetBytes(String.Format("{0:d04}", keyBlock.Length / 2)), 0, cmd, offset, 4);
+            offset += 4;
+
+            //Key Block Template 
+            byte[] keyblockByte = ASCIIEncoding.ASCII.GetBytes(keyBlock);
+            Buffer.BlockCopy(keyblockByte, 0, cmd, offset, keyblockByte.Length);
+            offset += keyblockByte.Length;
+
+            //Delimiter
+            cmd[offset++] = 0x3B; //;
+
+            //DES Key Offset
+            int desKeyOffset = (keyBlock.IndexOf("00000000000000000000000000000000") + 1) / 2;
+            System.Buffer.BlockCopy(System.Text.ASCIIEncoding.ASCII.GetBytes(String.Format("{0:d04}", desKeyOffset)), 0, cmd, offset, 4);
+            offset += 4;
+
+
+            //Check value length
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+
+            //Check Value Offset
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+            cmd[offset++] = 0x30;
+
+
+            Array.Resize<byte>(ref cmd, offset);
+
+            byte[] rsp;
+
+            bool bRes = Transmit(cmd, out rsp);
+
+            string cmdStr = BitConverter.ToString(cmd).Replace("-", "");
+            string rspStr = BitConverter.ToString(rsp).Replace("-", "");
+            if(bRes == false) {
+                return HSM8000Error.CommunicationError;
+            }
+
+            if(rsp[0] != 0x47 || rsp[1] != 0x4C)
+                return HSM8000Error.UnknownResponseCode;
+
+            if(rsp[2] != '0' || rsp[3] != '0') {
+                int respcode = ((rsp[2] - '0') * 10) + (rsp[3] - '0');
+                if(Enum.IsDefined(typeof(HSM8000Error), respcode) == false)
+                    return HSM8000Error.UnknownError;
+
+                return (HSM8000Error)respcode;
+            }
+
+            StringBuilder sb = new StringBuilder();
+
+            offset = 4;
+
+            // length
+            sb.Remove(0, sb.Length);
+            for(int i = 0;i < 4;i++, offset++) {
+                sb.Append((char)rsp[offset]);
+            }
+
+            int len = int.Parse(sb.ToString());
+
+            // exported key block
+            sb.Remove(0, sb.Length);
+            for(int i = 0;i < len;i++, offset++) {
+                sb.AppendFormat("{0:X2}", rsp[offset]);
+            }
+            encTMK = sb.ToString();
+
+            return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateHash(string data, out string hash) {
+            hash = "";
+
+            StringBuilder sb = new StringBuilder();
+
+            sb.Append("GM");
+            //SHA256 for EPP 7 
+            //sb.Append("06"); // Hash identifier is 06:SHA-256
+            //SHA1 for EPP 4/5 
+            sb.Append("01"); // Hash identifier is 01:SHA-1
+
+            sb.Append(String.Format("{0:d05}", data.Length / 2));
+
+            byte[] cmd = new byte[sb.Length + data.Length / 2];
+
+            int offset = 0;
+            System.Buffer.BlockCopy(System.Text.Encoding.ASCII.GetBytes(sb.ToString()),
+                                    0, cmd, offset, sb.Length);
+            offset += sb.Length;
+
+            System.Buffer.BlockCopy(ConvertHexStringToByteArray(data), 0, cmd, offset, data.Length / 2);
+            offset += data.Length / 2;
+
+
+            byte[] rsp;
+
+            uint recvTimeout = _recvTimeout;
+            _recvTimeout = 10000;
+
+            bool bRes = Transmit(cmd, out rsp);
+            _recvTimeout = recvTimeout;
+
+            if(bRes == false) {
+                return HSM8000Error.CommunicationError;
+            }
+
+            if(rsp[0] != 'G' || rsp[1] != 'N')
+                return HSM8000Error.UnknownResponseCode;
+
+            if(rsp[2] != '0' || rsp[3] != '0') {
+                int respcode = ((rsp[2] - '0') * 10) + (rsp[3] - '0');
+                if(Enum.IsDefined(typeof(HSM8000Error), respcode) == false)
+                    return HSM8000Error.UnknownError;
+
+                return (HSM8000Error)respcode;
+            }
+
+
+            byte[] hashByte = new byte[20];
+            System.Buffer.BlockCopy(rsp, 4, hashByte, 0, 20);
+            hash = BitConverter.ToString(hashByte).Replace("-", "");
+
+            return HSM8000Error.Success;
+        }
+     
+        public HSM8000Error GetPinFromZPKToLMK(string PinBlock, string ZPKUnderLMK, string PAN, string PinFormat, int PinLength, string HSMIP, int HSMPort, int Headerlen, out string ResultValue)
+        {
+            ResultValue = null;
+            try
+            {
+                //var result = ThalesHSMLib.SendCommand.GetPinFromZPKtoLMK(PinBlock, ZPKUnderLMK, PAN, PinFormat);
+                byte[] buffer2;
+                byte[] dst = new byte[65];
+                int index = 0;
+                dst[index] = 0x4A;
+                index++;
+                dst[index] = 0x45;
+                index++;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(ZPKUnderLMK), 0, dst, index, ZPKUnderLMK.Length);
+                index += ZPKUnderLMK.Length;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PinBlock), 0, dst, index, PinBlock.Length);
+                index += PinBlock.Length;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PinFormat), 0, dst, index, PinFormat.Length);
+                index += PinFormat.Length;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PAN.Substring(0, 12)), 0, dst, index, PAN.Length - 4);
+                index += PAN.Length - 4;
+                if (!this.Transmit(dst, out buffer2))
+                {
+                    return HSM8000Error.CommunicationError;
+                }
+                if ((buffer2[0] != 0x4a) || (buffer2[1] != 0x46))
+                {
+                    return HSM8000Error.UnknownResponseCode;
+                }
+                if ((buffer2[2] == 0x30) && (buffer2[3] == 0x30))
+                {
+                    StringBuilder builder = new StringBuilder();
+                    int num;
+                    for (num = 0; num < 5; num++)
+                    {
+                        builder.Append((char)buffer2[4 + num]);
+                    }
+                    ResultValue = builder.ToString();
+                    return HSM8000Error.Success;
+                }
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+
+
+            }
+            catch (Exception ex)
+            {
+                log.Error("GetPinFromZPKToLMK Error:", ex);
+                return HSM8000Error.UnknownError;
+            }
+        }
+
+        public HSM8000Error GetPinFromLMKtoZPK(string PinLmk, string ZPKUnderLMK, string PAN, string PinFormat, out string ResultValue)
+        {
+            ResultValue = "";
+            try
+            {
+                int msgLength = (ZPKUnderLMK.Length >= 72 ? 94 : 54);
+                byte[] buffer2;
+                byte[] dst = new byte[msgLength];
+                int index = 0;
+                dst[index] = 0x4A;
+                index++;
+                dst[index] = 0x47;
+                index++;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(ZPKUnderLMK), 0, dst, index, ZPKUnderLMK.Length);
+                index += ZPKUnderLMK.Length;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PinFormat), 0, dst, index, PinFormat.Length);
+                index += PinFormat.Length;
+                PAN = GetPanLastDigits(PAN, 12, false);
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PAN), 0, dst, index, PAN.Length);
+                index += PAN.Length;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(PinLmk), 0, dst, index, PinLmk.Length);
+                index += PinLmk.Length;
+
+                if (!this.Transmit(dst, out buffer2))
+                {
+                    return HSM8000Error.CommunicationError;
+                }
+                if ((buffer2[0] != 0x4a) || (buffer2[1] != 0x48))
+                {
+                    return HSM8000Error.UnknownResponseCode;
+                }
+                if ((buffer2[2] == 0x30) && (buffer2[3] == 0x30))
+                {
+                    StringBuilder builder = new StringBuilder();
+                    int num;
+                    for (num = 0; num < 16; num++)
+                    {
+                        builder.Append((char)buffer2[4 + num]);
+                    }
+                    ResultValue = builder.ToString();
+                    return HSM8000Error.Success;
+                }
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+
+            }
+            catch (Exception ex)
+            {
+                log.Error("GetPinFromZPKToLMK Error:", ex);
+                return HSM8000Error.UnknownError;
+            }
+        }
+
+        public HSM8000Error VerifyArqcEmv4x(string MdkAc, string ModeFlag, string SchemaID, string Pan, string Psn, string Atc, string TransactionData, string Arqc, string Arc, string Csu, out string ResultValue)
+        {
+            ResultValue = "";
+            try
+            {
+                byte[] buffer2;
+                byte[] dst = new byte[140];
+                int index = 0;
+                dst[index] = 0x4B;
+                index++;
+                dst[index] = 0x57;
+                index++;                
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(ModeFlag), 0, dst, index, 1);
+                index += 1;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(SchemaID), 0, dst, index, 1);
+                index += 1;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(MdkAc), 0, dst, index, MdkAc.Length);
+                index += MdkAc.Length;
+
+                Pan = Pan.Substring(2, 14) + Psn;
+                if (SchemaID == "1" || SchemaID=="3")
+                {
+                    int panLength = Pan.Length / 2;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(panLength.ToString("D2")), 0, dst, index, panLength.ToString("D2").Length);
+                    index += panLength.ToString("D2").Length;
+                }
+
+                //string newPan = PAN;
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Pan), 0, dst, index, Pan.Length/2);
+                index += Pan.Length/2;
+
+                if (SchemaID == "1" || SchemaID == "3")
+                {
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(";"), 0, dst, index,1);
+                    index += 1;
+                }
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Atc), 0, dst, index, Atc.Length/2);
+                index += Atc.Length/2;
+                if (ModeFlag=="0" || ModeFlag=="1" || ModeFlag == "3" || ModeFlag == "5")
+                {
+                    int TransactionDataLength = TransactionData.Length / 2;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(TransactionDataLength.ToString("X")), 0, dst, index, TransactionDataLength.ToString().Length);
+                    index += TransactionDataLength.ToString().Length;
+
+                    Buffer.BlockCopy(ConvertHexStringToByteArray(TransactionData), 0, dst, index, TransactionDataLength);
+                    index += TransactionDataLength;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(";"), 0, dst, index, 1); // delimiter/ayraç
+                    index += 1;
+                }                
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Arqc), 0, dst, index, Arqc.Length/2);
+                index += Arqc.Length/2;
+
+                if (ModeFlag == "1" || ModeFlag == "2")
+                {
+                    Buffer.BlockCopy(ConvertHexStringToByteArray(Arc), 0, dst, index, Arc.Length / 2);
+                    index += Arc.Length / 2;
+                }
+                if (ModeFlag == "0" || ModeFlag == "1" || ModeFlag == "3" || ModeFlag == "5")
+                {
+                    Buffer.BlockCopy(ConvertHexStringToByteArray(Csu), 0, dst, index, Csu.Length / 2);
+                    index += Csu.Length / 2;
+                }
+
+                if (ModeFlag == "3" || ModeFlag == "4")
+                {
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes("0"), 0, dst, index, 1); 
+                    index += 1;
+                }
+
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes("%00"), 0, dst, index, 3);
+                index += 3;
+
+                log.InfoFormat("VerifyArqcEmv4x Index:{0}", index);
+
+                byte[] destBuffer = new byte[index];
+                Array.Copy(dst, 0, destBuffer, 0, index);
+                if (!this.Transmit(destBuffer, out buffer2))
+                {
+                    return HSM8000Error.CommunicationError;
+                }
+                if ((buffer2[0] != 0x4b) || (buffer2[1] != 0x58))
+                {
+                    return HSM8000Error.UnknownResponseCode;
+                }
+                if ((buffer2[2] == 0x30) && (buffer2[3] == 0x30))
+                {
+                    
+                    byte[] arpcBuffer = new byte[8];
+                    Array.Copy(buffer2, 4, arpcBuffer, 0, 8);
+                    ResultValue = ByteArrayToHex(arpcBuffer);
+                    ResultValue = ResultValue.ToUpper();
+                    return HSM8000Error.Success;
+                }
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+
+            }
+            catch (Exception ex)
+            {
+                log.Error("VerifyArqcEmv4x Error:", ex);
+                return HSM8000Error.UnknownError;
+            }
+            //return HSM8000Error.Success;
+        }
+               
+        public HSM8000Error VerifyARQC(string MdkAc, string SchemaID, string Pan, string Psn, string Atc, string Un, string TransactionData, string Arqc, string Arc, out string ResultValue)
+        {
+            ResultValue = "";
+            try
+            {
+                byte[] buffer2;
+                byte[] dst = new byte[104];
+                int index = 0;
+                dst[index] = 0x4B;
+                index++;
+                dst[index] = 0x51;
+                index++;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes("1"), 0, dst, index, 1);
+                index += 1;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(SchemaID), 0, dst, index, 1);
+                index += 1;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(MdkAc), 0, dst, index, MdkAc.Length);
+                index += MdkAc.Length;
+                Pan = Pan.Substring(2, 14) + Psn;
+                //string newPan = PAN;
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Pan), 0, dst, index, Pan.Length / 2);
+                index += Pan.Length / 2;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Atc), 0, dst, index, Atc.Length / 2);
+                index += Atc.Length / 2;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Un), 0, dst, index, Un.Length / 2);
+                index += Un.Length / 2;
+
+                int TransactionDataLength = TransactionData.Length / 2;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(TransactionDataLength.ToString("X")), 0, dst, index, TransactionDataLength.ToString().Length);
+                index += TransactionDataLength.ToString().Length;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(TransactionData), 0, dst, index, TransactionDataLength);
+                index += TransactionDataLength;
+
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(";"), 0, dst, index, 1); // delimiter/ayraç
+                index += 1;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Arqc), 0, dst, index, Arqc.Length / 2);
+                index += Arqc.Length / 2;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(Arc), 0, dst, index, Arc.Length / 2);
+                index += Arc.Length / 2;
+
+
+                if (!this.Transmit(dst, out buffer2))
+                {
+                    return HSM8000Error.CommunicationError;
+                }
+                if ((buffer2[0] != 0x4b) || (buffer2[1] != 0x52))
+                {
+                    return HSM8000Error.UnknownResponseCode;
+                }
+                if ((buffer2[2] == 0x30) && (buffer2[3] == 0x30))
+                {
+                    byte[] arpcBuffer = new byte[8];
+                    Array.Copy(buffer2, 4, arpcBuffer, 0, 8);
+                    ResultValue = ByteArrayToHex(arpcBuffer).ToUpper();
+                    return HSM8000Error.Success;
+                }
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+
+            }
+            catch (Exception ex)
+            {
+                log.Error("VerifyARQC Error:", ex);
+                return HSM8000Error.UnknownError;
+            }
+            //return HSM8000Error.Success;
+        }
+
+        public HSM8000Error GenerateSecureMessageForPinChange(GenerateSecureMessage parameters, out string ResultValue)
+        {
+            ResultValue = "";
+            try
+            {
+                byte[] buffer2;
+                byte[] cmd = new byte[450];
+                int index = 0;
+                cmd[index] = 0x4B;
+                index++;
+                cmd[index] = 0x55;
+                index++;
+                if (Array.IndexOf(validModeFlags, parameters.ModeFlag) < 0)
+                {
+                    return HSM8000Error.UnknownError;
+                }
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(parameters.ModeFlag), 0, cmd, index, 1);
+                index++;
+
+                if (Array.IndexOf(validEmvSchemes, parameters.SchemeId) < 0)
+                {
+                    return HSM8000Error.UnknownError;
+                }
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(parameters.SchemeId), 0, cmd, index, 1);
+                index++;
+                int masterKeyForIntegrityLength;
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(addKeyPrefix(parameters.MasterKeyForIntegrity, parameters.LmkType, out masterKeyForIntegrityLength)), 0, cmd, index, masterKeyForIntegrityLength);
+                index += masterKeyForIntegrityLength;
+
+                string PanPsn = parameters.Pan.Substring(2, 14) + parameters.PanSeqNumber;
+                //int panLength = PanPsn.Length / 2;
+                //Buffer.BlockCopy(Encoding.ASCII.GetBytes(panLength.ToString("D2")), 0, cmd, index, panLength.ToString("D2").Length);
+                //index += panLength.ToString("D2").Length;
+                Buffer.BlockCopy(ConvertHexStringToByteArray(PanPsn), 0, cmd, index, PanPsn.Length / 2);
+                index += PanPsn.Length / 2;
+                Buffer.BlockCopy(ConvertHexStringToByteArray(parameters.IntegritySessionKeyData), 0, cmd, index, parameters.IntegritySessionKeyData.Length / 2);
+                index += parameters.IntegritySessionKeyData.Length / 2;
+
+                int messageDataLength = parameters.MessageData.Length / 2;
+                string s_messageDataLength = GetHex2Length(messageDataLength).PadLeft(4, '0');
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(s_messageDataLength), 0, cmd, index, 4);
+                index += 4;
+
+                Buffer.BlockCopy(ConvertHexStringToByteArray(parameters.MessageData), 0, cmd, index, parameters.MessageData.Length / 2);
+                index += parameters.MessageData.Length / 2;
+
+                Buffer.BlockCopy(Encoding.ASCII.GetBytes(";"), 0, cmd, index, 1);
+                index++;
+
+                if (parameters.ModeFlag == "2" || parameters.ModeFlag == "4")
+                {
+                    int masterKeyForConfidentiallyLength;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(addKeyPrefix(parameters.MasterKeyForConfidentially, parameters.LmkType, out masterKeyForConfidentiallyLength)), 0, cmd, index, masterKeyForConfidentiallyLength);
+                    index += masterKeyForConfidentiallyLength;
+                }
+
+                if (parameters.ModeFlag == "1" || parameters.ModeFlag == "2")
+                {
+                    // TRANSPORT KEY eklenecek
+                    //Buffer.BlockCopy(ConvertHexStringToByteArray(parameters.MasterKeyForConfidentially), 0, cmd, index, parameters.MasterKeyForConfidentially.Length / 2);
+                    //index += parameters.MasterKeyForConfidentially.Length / 2;
+                }
+
+                if (parameters.ModeFlag != "0")
+                {                  
+                    Buffer.BlockCopy(ConvertHexStringToByteArray(parameters.SessionData), 0, cmd, index, parameters.SessionData.Length / 2);
+                    index += parameters.SessionData.Length / 2;
+
+                    int offset = Convert.ToInt32(parameters.Offset);
+                    string s_offset = GetHex2Length(offset).PadLeft(4, '0');
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(s_offset), 0, cmd, index, 4);
+                    index += 4;
+                }
+
+                if (parameters.ModeFlag != "0")
+                {
+                    int cipherDataLength = parameters.CipherData.Length / 2;
+                    string s_cipherDataLength = GetHex2Length(cipherDataLength).PadLeft(4, '0');
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(s_cipherDataLength), 0, cmd, index, 4);
+                    index += 4;
+
+                    Buffer.BlockCopy(ConvertHexStringToByteArray(parameters.CipherData), 0, cmd, index, parameters.CipherData.Length / 2);
+                    index += parameters.CipherData.Length / 2;
+
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(";"), 0, cmd, index, 1);
+                    index++;
+                }
+
+                if (parameters.ModeFlag == "3" || parameters.ModeFlag == "4")
+                {
+                    string sourcePinKeyType = parameters.LmkType == "K" ? "F" : parameters.SourcePinKeyType;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(sourcePinKeyType), 0, cmd, index, 1);
+                    index++;
+
+                    int sourcePinEncKeyLength;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(addKeyPrefix(parameters.SourcePinEncKey, parameters.LmkType, out sourcePinEncKeyLength)), 0, cmd, index, sourcePinEncKeyLength);
+                    index += sourcePinEncKeyLength;
+
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(parameters.SourcePinBlockFormat), 0, cmd, index, parameters.SourcePinBlockFormat.Length);
+                    index += parameters.SourcePinBlockFormat.Length;
+
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(parameters.DestinationPinBlockFormat), 0, cmd, index, parameters.DestinationPinBlockFormat.Length);
+                    index += parameters.DestinationPinBlockFormat.Length;
+                }
+
+                if (parameters.ModeFlag == "4")
+                {
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(parameters.Pan.Substring(3,12)), 0, cmd, index, 12);
+                    index += 12;
+                }
+
+                if ((parameters.ModeFlag == "3" || parameters.ModeFlag == "4") && (parameters.DestinationPinBlockFormat == "41" || parameters.DestinationPinBlockFormat == "42"))
+                {
+                    int acKeyLength;
+                    Buffer.BlockCopy(Encoding.ASCII.GetBytes(addKeyPrefix(parameters.AcKey, parameters.LmkType,out acKeyLength)), 0, cmd, index, acKeyLength);
+                    index += acKeyLength;
+                }
+
+                byte[] destBuffer = new byte[index];
+                Array.Copy(cmd, 0, destBuffer, 0, index);
+                if (!this.Transmit(destBuffer, out buffer2))
+                {
+                    return HSM8000Error.CommunicationError;
+                }
+                if ((buffer2[0] != 0x4b) || (buffer2[1] != 0x56))
+                {
+                    return HSM8000Error.UnknownResponseCode;
+                }
+                if ((buffer2[2] == 0x30) && (buffer2[3] == 0x30))
+                {
+
+                    byte[] responseBuffer = new byte[buffer2.Length - 4];
+                    Array.Copy(buffer2, 4, responseBuffer, 0, buffer2.Length - 4);
+                    ResultValue = ByteArrayToHex(responseBuffer);
+                    ResultValue = ResultValue.ToUpper();
+                    return HSM8000Error.Success;
+                }
+                int num2 = ((buffer2[2] - 0x30) * 10) + (buffer2[3] - 0x30);
+                if (Enum.IsDefined(typeof(HSM8000Error), num2))
+                {
+                    return (HSM8000Error)num2;
+                }
+                return HSM8000Error.UnknownError;
+
+            }
+            catch (Exception ex)
+            {
+                log.Error("GenerateSecureMessageForPinChange Error:", ex);
+                return HSM8000Error.UnknownError;
+            }
+            //return HSM8000Error.Success;
+        }
+        private string addKeyPrefix(string key, string lmkType, out int keyLength)
+        {
+            keyLength = 0;
+            if (string.IsNullOrEmpty(key))
+                return key;
+            string formatKey = key;
+            //lmk type VARIANT
+            if (lmkType =="V" && (key.Length==32 || !key.StartsWith("U")))
+            {
+                formatKey =  string.Format("U{0}", key);
+            }
+            //lmk type KEY BLOCK
+            if (lmkType == "K" && (key.Length == 32 || !key.StartsWith("S")))
+            {
+                formatKey = string.Format("S{0}", key);
+            }
+            keyLength = formatKey.Length;
+            return formatKey;
+        }
+
+        static string GetHex2Length(int lenValue)
+        {
+            return string.Format("{0:x2}", lenValue).ToUpper();
+        }
+
+        static string ByteArrayToHex( byte[] ba ) {
+            if(ba == null)
+                return string.Empty;
+            if (ba.Length == 0)
+                return string.Empty;
+            StringBuilder sb = new StringBuilder( ba.Length * 2 );
+            foreach ( byte b in ba )
+                sb.AppendFormat( "{0:x2}", b );
+            return sb.ToString( );
+        }
+
+        private byte[] ConvertHexStringToByteArray(string hexString) {
+            if(hexString.Length % 2 != 0) {
+                throw new ArgumentException(String.Format(CultureInfo.InvariantCulture, "The binary key cannot have an odd number of digits: {0}", hexString));
+            }
+
+            byte[] HexAsBytes = new byte[hexString.Length / 2];
+            for(int index = 0;index < HexAsBytes.Length;index++) {
+                string byteValue = hexString.Substring(index * 2, 2);
+                HexAsBytes[index] = byte.Parse(byteValue, NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            }
+
+            return HexAsBytes;
+        }
+
+        private string GetPanLastDigits(string pan, int digitLength, bool includedCheckDigit)
+        {
+            if (string.IsNullOrEmpty(pan))
+                return pan;
+            if (pan.Length < digitLength)
+                return pan;
+            int startIndex = pan.Length - digitLength - (includedCheckDigit ? 0 : 1);
+            if (startIndex < 0)
+                return pan;
+            return pan.Substring(startIndex, digitLength);
+        }
+
+        private static void BlockCopyPanPanSeq(string pan, string panseq, byte[] cmd, ref int offset)
+        {
+            int panstart = 0;
+            int len = 7;
+
+            if (pan.Length >= 14)
+            {
+                panstart = pan.Length - 14;
+            }
+            else
+            {
+                if ((pan.Length % 2) == 1)
+                {
+                    cmd[offset++] = (byte)(pan[panstart++] - 0x30);
+                }
+                else
+                {
+                    cmd[offset++] = 0x00;
+                }
+                len--;
+            }
+
+           // pan.GetBytes(panstart, cmd, offset, len); offset += len;
+            cmd[offset++] = (byte)(((panseq[0] - 0x30) << 4) + (panseq[1] - 0x30));
+        }
+
+        public TcpClient Connection {
+            get {
+                return this._connection;
+            }
+            set {
+                this._connection = value;
+            }
+        }
+
+        public int HeaderLength {
+            get {
+                return this._headerLength;
+            }
+            set {
+                this._headerLength = value;
+            }
+        }
+
+        public uint ReceiveTimeout {
+            get {
+                return this._recvTimeout;
+            }
+            set {
+                this._recvTimeout = value;
+            }
+        }
+    }
+}
+
